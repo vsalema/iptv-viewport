@@ -357,6 +357,17 @@
     var ch = state.channels[index];
     if (!ch) return;
     state.index = index;
+// 1) Mixed Content guard: HTTPS page + HTTP stream
+if (window.location && window.location.protocol === 'https:' && /^http:\/\//i.test(ch.url)) {
+  alert('Lecture bloquée : flux HTTP sur page HTTPS (Mixed Content). Cherche un lien en HTTPS ou ouvre le flux dans un onglet séparé.');
+  return;
+}
+
+// 2) DASH non supporté sans plugin dash.js
+if (ch.type === 'dash') {
+  alert('Ce flux est en DASH (.mpd) et ton player n’a pas le plugin dash.js. Ajoute videojs-contrib-dash ou fournis une URL HLS (.m3u8).');
+  return;
+}
 
     // Playlist M3U → on la charge et on remplace la liste par son contenu
     if (ch.type === 'm3u-list') {
@@ -366,14 +377,29 @@
 
     var src = srcForPlayer(ch);
 
-    if (vjs) {
-      vjs.src(src);
-      vjs.play().catch(function(){});
-    } else if (el.player) {
-      if (src && typeof src === 'object') el.player.src = src.src || '';
-      else el.player.src = (src && src.src) || ch.url || '';
-      if (el.player.play) { try { el.player.play(); } catch (e) {} }
-    }
+   if (vjs) {
+  // Nettoie les erreurs précédentes
+  try { vjs.off('error'); } catch(_) {}
+  vjs.on('error', function () {
+    var e = vjs.error() || {};
+    var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
+    alert('Lecture impossible : ' + (e.message || 'erreur inconnue') + code + 
+          '\n• Causes fréquentes : CORS sur le .m3u8, géoblocage, flux mort.');
+  });
+
+  vjs.src(src);
+  vjs.play().catch(function(){ /* autoplay bloqué → l’utilisateur a déjà cliqué, donc ok */ });
+} else if (el.player) {
+  // Fallback <video> natif
+  el.player.onerror = function () {
+    var err = (el.player.error && el.player.error()) || {};
+    alert('Lecture impossible (video natif) : ' + (err.message || 'erreur inconnue'));
+  };
+  if (src && typeof src === 'object') el.player.src = src.src || '';
+  else el.player.src = (src && src.src) || ch.url || '';
+  if (el.player.play) { try { el.player.play(); } catch (_) {} }
+}
+
 
     // NOWBAR
     if (el.nowbar) el.nowbar.classList.remove('d-none');
@@ -522,3 +548,4 @@
     }
   };
 })();
+
