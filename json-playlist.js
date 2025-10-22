@@ -355,11 +355,10 @@
   // ===== Lecture =====
   function playAt(index) {
     var ch = state.channels[index];
-    if (!ch) return;
-    state.index = index;
-// 1) Mixed Content guard: HTTPS page + HTTP stream
-if (window.location && window.location.protocol === 'https:' && /^http:\/\//i.test(ch.url)) {
-  alert('Lecture bloquée : flux HTTP sur page HTTPS (Mixed Content). Cherche un lien en HTTPS ou ouvre le flux dans un onglet séparé.');
+   if (ch.type === 'dash' && !window.dashjs) {
+  alert('Flux DASH (.mpd) détecté, mais dash.js n’est pas chargé. Ajoute :\n' +
+        '• <script src="https://cdn.jsdelivr.net/npm/dashjs@4/dist/dash.all.min.js"></script>\n' +
+        '• <script src="https://cdn.jsdelivr.net/npm/videojs-contrib-dash@2/dist/videojs-dash.min.js"></script>');
   return;
 }
 
@@ -386,6 +385,27 @@ if (ch.type === 'dash') {
     alert('Lecture impossible : ' + (e.message || 'erreur inconnue') + code + 
           '\n• Causes fréquentes : CORS sur le .m3u8, géoblocage, flux mort.');
   });
+// Juste avant le vjs.src(...)
+console.log('[PLAY]', ch.type, ch.url);
+
+if (vjs) {
+  try { vjs.off('error'); } catch(_) {}
+  vjs.on('error', function () {
+    var e = vjs.error() || {};
+    var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
+    alert('Lecture impossible : ' + (e.message || 'erreur inconnue') + code +
+          '\nURL : ' + (ch.url || '-') +
+          '\nCauses fréquentes : CORS sur le .m3u8, géoblocage, flux mort.');
+  });
+  vjs.src(src);
+  vjs.play().catch(function(){});
+} else if (el.player) {
+  el.player.onerror = function () {
+    var err = el.player.error ? el.player.error() : {};
+    alert('Lecture impossible (video natif) : ' + (err.message || 'erreur inconnue') + '\nURL : ' + (ch.url || '-'));
+  };
+  // ... (le reste inchangé)
+}
 
   vjs.src(src);
   vjs.play().catch(function(){ /* autoplay bloqué → l’utilisateur a déjà cliqué, donc ok */ });
@@ -547,5 +567,40 @@ if (ch.type === 'dash') {
       };
     }
   };
+// --- Hook "Vérifier les liens" pour les listes chargées via JSON ---
+(function hookCheckButtons(){
+  var btns = [ document.getElementById('btnCheckLinks'), document.getElementById('btnCheckLinks2') ];
+  btns.forEach(function(btn){
+    if (!btn) return;
+    btn.addEventListener('click', function(ev){
+      // Si le loader d’origine gère déjà une M3U active, on le laisse faire
+      if (window.hasOwnProperty('playlistData') && window.playlistData && window.playlistData.length) return;
+
+      ev.preventDefault();
+      if (!state.channels.length) { alert('Charge d’abord une liste (JSON ou M3U).'); return; }
+
+      var list = state.channels.slice(0, 50); // limite pour éviter de saturer
+      var ok = 0, fail = 0, done = 0;
+
+      function updateSummary() {
+        var elSum = document.getElementById(btn.id === 'btnCheckLinks2' ? 'checkSummary2' : 'checkSummary');
+        if (elSum) elSum.textContent = 'OK: ' + ok + ' — Erreurs: ' + fail + ' — Testés: ' + done + '/' + list.length + ' (best-effort CORS)';
+      }
+
+      updateSummary();
+
+      list.forEach(function(ch){
+        // HEAD est souvent bloqué par CORS → on tente GET, no-store pour éviter le cache
+        fetch(ch.url, { method: 'GET', cache: 'no-store' }).then(function(r){
+          if (r && (r.ok || r.status === 200)) ok++; else fail++;
+        }).catch(function(){ fail++; }).finally(function(){
+          done++; updateSummary();
+        });
+      });
+    }, true);
+  });
 })();
+
+})();
+
 
