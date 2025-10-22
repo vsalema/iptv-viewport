@@ -365,7 +365,15 @@
  <!-- Tes scripts -->
   <script src="./scriptiptv.js" defer></script>
   <script src="./json-playlist.js" defer></script>
+<script>
+  window.addEventListener('DOMContentLoaded', function () {
+    if (window.IPTV_JSON && IPTV_JSON.load) {
+      IPTV_JSON.load('https://vsalema.github.io/streamboxv.3/playlists.json');
+    }
+  });
+</script>
 </body>
 </html>
+
 
 
