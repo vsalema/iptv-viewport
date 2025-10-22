@@ -123,6 +123,14 @@
       var entries = parseJsonToEntries(obj);
       state.entries = entries;
       renderList();
+// Ouvrir le panneau pour voir la liste
+try {
+  var offEl = document.getElementById('panel');
+  if (offEl && window.bootstrap && bootstrap.Offcanvas) {
+    var oc = bootstrap.Offcanvas.getOrCreateInstance(offEl);
+    oc.show();
+  }
+} catch (_) {}
 
       if (!entries.length) {
         alert('Le JSON est chargé, mais ne contient aucune entrée exploitable (name/url manquants).');
@@ -158,12 +166,7 @@
     if (el.inlineList) el.inlineList.innerHTML = html;
 
     // Clic → déléguer au loader natif
-    Array.prototype.forEach.call(document.querySelectorAll('[data-idx]'), function (btn) {
-      btn.addEventListener('click', function (ev) {
-        var idx = Number(ev.currentTarget.getAttribute('data-idx'));
-        playAt(idx);
-      });
-    });
+    
 
     if (el.zapTitle) el.zapTitle.textContent = state.filtered[0] ? state.filtered[0].name : '—';
   }
@@ -231,4 +234,20 @@
     load: loadJsonFromUrl,
     state: function () { return { entries: state.entries.slice(), filtered: state.filtered.slice() }; }
   };
+// Délégation globale : fonctionne même si la liste est réécrite
+document.addEventListener('click', function (ev) {
+  var btn = ev.target && ev.target.closest && ev.target.closest('[data-idx]');
+  if (!btn) return;
+  // S’assurer que le bouton vient de nos listes
+  var inList = btn.closest('#channelList, #channelList2, #inlineChannelList');
+  if (!inList) return;
+
+  var idx = Number(btn.getAttribute('data-idx'));
+  // Recalcule l’index côté "filtered" si nécessaire
+  if (!Number.isFinite(idx) || idx < 0) return;
+  playAt(idx);
+}, true);
+
+
 })();
+
