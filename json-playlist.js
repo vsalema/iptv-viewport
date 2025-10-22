@@ -47,10 +47,23 @@
     inputUrl: document.getElementById('inputUrl'),
     btnPlay: document.getElementById('btnPlay')
   };
+// SUPPRIMER ces lignes si elles existent encore :
+// var vjs = null;
+// try { vjs = window.videojs ? window.videojs('player') : null; } catch (e) {}
 
-  var vjs = null;
-  try { vjs = window.videojs ? window.videojs('player') : null; } catch (e) {}
+// AJOUTER à la place :
+function getVJS() {
+  if (!window.videojs) return null;
+  // Privilégier getPlayer (ne crée pas une nouvelle instance)
+  if (typeof window.videojs.getPlayer === 'function') {
+    var p = window.videojs.getPlayer('player');
+    if (p) return p;
+  }
+  // Sinon, récupère (ou crée si pas encore init)
+  try { return window.videojs('player'); } catch(e) { return null; }
+}
 
+ 
   var state = {
     meta: {},
     channels: [],
@@ -354,83 +367,89 @@
 
   // ===== Lecture =====
   function playAt(index) {
-    var ch = state.channels[index];
-   if (ch.type === 'dash' && !window.dashjs) {
-  alert('Flux DASH (.mpd) détecté, mais dash.js n’est pas chargé. Ajoute :\n' +
-        '• <script src="https://cdn.jsdelivr.net/npm/dashjs@4/dist/dash.all.min.js"></script>\n' +
-        '• <script src="https://cdn.jsdelivr.net/npm/videojs-contrib-dash@2/dist/videojs-dash.min.js"></script>');
-  return;
-}
+  var ch = state.channels[index];
+  if (!ch) return;
+  state.index = index;
 
-// 2) DASH non supporté sans plugin dash.js
-if (ch.type === 'dash') {
-  alert('Ce flux est en DASH (.mpd) et ton player n’a pas le plugin dash.js. Ajoute videojs-contrib-dash ou fournis une URL HLS (.m3u8).');
-  return;
-}
-
-    // Playlist M3U → on la charge et on remplace la liste par son contenu
-    if (ch.type === 'm3u-list') {
-      loadM3UFromUrl(ch.url);
-      return;
-    }
-
-    var src = srcForPlayer(ch);
-
-   if (vjs) {
-  // Nettoie les erreurs précédentes
-  try { vjs.off('error'); } catch(_) {}
-  vjs.on('error', function () {
-    var e = vjs.error() || {};
-    var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
-    alert('Lecture impossible : ' + (e.message || 'erreur inconnue') + code + 
-          '\n• Causes fréquentes : CORS sur le .m3u8, géoblocage, flux mort.');
-  });
-// Juste avant le vjs.src(...)
-console.log('[PLAY]', ch.type, ch.url);
-
-if (vjs) {
-  try { vjs.off('error'); } catch(_) {}
-  vjs.on('error', function () {
-    var e = vjs.error() || {};
-    var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
-    alert('Lecture impossible : ' + (e.message || 'erreur inconnue') + code +
-          '\nURL : ' + (ch.url || '-') +
-          '\nCauses fréquentes : CORS sur le .m3u8, géoblocage, flux mort.');
-  });
-  vjs.src(src);
-  vjs.play().catch(function(){});
-} else if (el.player) {
-  el.player.onerror = function () {
-    var err = el.player.error ? el.player.error() : {};
-    alert('Lecture impossible (video natif) : ' + (err.message || 'erreur inconnue') + '\nURL : ' + (ch.url || '-'));
-  };
-  // ... (le reste inchangé)
-}
-
-  vjs.src(src);
-  vjs.play().catch(function(){ /* autoplay bloqué → l’utilisateur a déjà cliqué, donc ok */ });
-} else if (el.player) {
-  // Fallback <video> natif
-  el.player.onerror = function () {
-    var err = (el.player.error && el.player.error()) || {};
-    alert('Lecture impossible (video natif) : ' + (err.message || 'erreur inconnue'));
-  };
-  if (src && typeof src === 'object') el.player.src = src.src || '';
-  else el.player.src = (src && src.src) || ch.url || '';
-  if (el.player.play) { try { el.player.play(); } catch (_) {} }
-}
-
-
-    // NOWBAR
-    if (el.nowbar) el.nowbar.classList.remove('d-none');
-    if (el.channelLogo) {
-      if (ch.logo) { el.channelLogo.src = ch.logo; el.channelLogo.classList.remove('d-none'); }
-      else { el.channelLogo.src = ''; el.channelLogo.classList.add('d-none'); }
-    }
-    if (el.nowPlaying) el.nowPlaying.textContent = ch.name || 'Lecture';
-    if (el.nowUrl) el.nowUrl.textContent = ch.url || '';
-    if (el.zapTitle) el.zapTitle.textContent = ch.name || '—';
+  // 1) Garde-fou Mixed Content
+  if (location.protocol === 'https:' && /^http:\/\//i.test(ch.url)) {
+    alert('Bloqué : flux HTTP sur page HTTPS (Mixed Content). Cherche une URL HTTPS.');
+    return;
   }
+
+  // 2) DASH : ne bloque QUE si dash.js absent
+  if (ch.type === 'dash' && !window.dashjs) {
+    alert('Flux DASH (.mpd) détecté, mais dash.js n’est pas chargé.\n' +
+          'Ajoute dashjs + videojs-dash avant tes scripts.');
+    return;
+  }
+
+  // 3) Si l’entrée est une playlist M3U → on la charge et on remplace la liste
+  if (ch.type === 'm3u-list') {
+    loadM3UFromUrl(ch.url);
+    return;
+  }
+
+  // 4) Prépare la source
+  var src = srcForPlayer(ch);
+  console.log('[PLAY]', ch.type, ch.url, src);
+
+  // 5) Player Video.js (toujours reprendre l’instance vivante)
+  var vjs = getVJS();
+
+  if (vjs) {
+    // Nettoyage minimal avant nouvelle source
+    try { vjs.off('error'); } catch(_) {}
+    try { if (typeof vjs.reset === 'function') vjs.reset(); } catch(_) {}
+    try { vjs.pause(); } catch(_) {}
+
+    // Écouteur d’erreurs utile
+    vjs.on('error', function () {
+      var e = vjs.error() || {};
+      var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
+      alert(
+        'Lecture impossible : ' + (e.message || 'erreur réseau') + code +
+        '\nURL : ' + (ch.url || '-') +
+        '\nCauses fréquentes : CORS sur le .m3u8, Mixed Content, géoblocage, flux hors ligne.'
+      );
+    });
+
+    // Applique la source, force le (re)load, puis play
+    try { vjs.src(src); } catch(_) {}
+    try { if (typeof vjs.load === 'function') vjs.load(); } catch(_) {}
+    vjs.play().catch(function(){});
+
+  } else if (el.player) {
+    // Fallback <video> natif
+    try { el.player.onerror = function () {
+      var err = (el.player.error && el.player.error()) || {};
+      alert('Lecture impossible (video natif) : ' + (err.message || 'erreur inconnue') + '\nURL : ' + (ch.url || '-'));
+    }; } catch(_) {}
+
+    try {
+      // “reset” soft
+      el.player.pause && el.player.pause();
+      el.player.removeAttribute && el.player.removeAttribute('src');
+      el.player.load && el.player.load();
+      // nouvelle source
+      if (src && typeof src === 'object') el.player.src = src.src || '';
+      else el.player.src = (src && src.src) || ch.url || '';
+      el.player.load && el.player.load();
+      el.player.play && el.player.play();
+    } catch(_) {}
+  }
+
+  // 6) NOWBAR / titres
+  if (el.nowbar) el.nowbar.classList.remove('d-none');
+  if (el.channelLogo) {
+    if (ch.logo) { el.channelLogo.src = ch.logo; el.channelLogo.classList.remove('d-none'); }
+    else { el.channelLogo.src = ''; el.channelLogo.classList.add('d-none'); }
+  }
+  if (el.nowPlaying) el.nowPlaying.textContent = ch.name || 'Lecture';
+  if (el.nowUrl) el.nowUrl.textContent = ch.url || '';
+  if (el.zapTitle) el.zapTitle.textContent = ch.name || '—';
+}
+
 
   // ===== Chargement JSON =====
   async function loadJsonFromUrl(url) {
@@ -602,5 +621,6 @@ if (vjs) {
 })();
 
 })();
+
 
 
