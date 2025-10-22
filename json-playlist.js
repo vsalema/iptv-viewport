@@ -382,67 +382,52 @@ function playAt(index) {
   if (!ch) return;
   state.index = index;
 
-  // HTTPS page + HTTP flux → bloqué
+  // HTTPS page + HTTP flux → bloqué par le navigateur
   if (location.protocol === 'https:' && /^http:\/\//i.test(ch.url)) {
     alert('Bloqué : flux HTTP sur page HTTPS (Mixed Content). Cherche une URL HTTPS.');
     return;
   }
 
-  // DASH → ne bloque QUE si dash.js absent
-  if (ch.type === 'dash' && !window.dashjs) {
-    alert('Flux DASH (.mpd) détecté, mais dash.js n’est pas chargé.');
-    return;
-  }
-
-  // Si c'est une playlist M3U, charge son contenu puis stop
+  // Si c’est une entrée “playlist M3U”, on délègue aussi au loader natif
   if (ch.type === 'm3u-list') {
+    if (typeof window.loadSource === 'function') {
+      // Laisse scriptiptv.js charger la M3U et remplir l’UI
+      window.loadSource(ch.url);
+      return;
+    }
+    // Fallback éventuel si le loader natif n’est pas dispo
     loadM3UFromUrl(ch.url);
     return;
   }
 
-  var src = srcForPlayer(ch);
-  var vjs = getVJS && getVJS();
+  // Pour toute chaîne jouable (.m3u8/.mp4/.mp3/.mpd/YouTube) → on délègue
+  if (typeof window.loadSource === 'function') {
+    window.loadSource(ch.url);
+  } else {
+    // Fallback minimal (au cas où le loader natif n’existe pas)
+    var src = srcForPlayer(ch);
+    var vjs = (window.videojs && (window.videojs.getPlayer ? window.videojs.getPlayer('player') : window.videojs('player'))) || null;
 
-  // Choix de la "tech"
-  var newTech = techFromChannel(ch);
-  var techChanged = (lastTech !== newTech);
-  lastTech = newTech;
-
-  if (vjs) {
-    // On n'utilise PLUS vjs.reset() ni vjs.load() ici (ça ralentit tout).
-    try { vjs.off('error'); } catch(_) {}
-    vjs.on('error', function () {
-      var e = vjs.error() || {};
-      var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
-      alert(
-        'Lecture impossible : ' + (e.message || 'erreur réseau') + code +
-        '\nURL : ' + (ch.url || '-') +
-        '\nCauses fréquentes : CORS, Mixed Content, géoblocage, flux hors ligne.'
-      );
-    });
-
-    // Reset léger UNIQUEMENT si on change de techno (ex: YouTube → HLS)
-    if (techChanged) {
-      try { vjs.pause(); } catch(_){}
-      try { vjs.src({ src: '' }); } catch(_){}
+    if (vjs) {
+      try { vjs.off('error'); } catch(_) {}
+      vjs.on('error', function () {
+        var e = vjs.error() || {};
+        var code = (e.code != null) ? (' (code ' + e.code + ')') : '';
+        alert('Lecture impossible : ' + (e.message || 'erreur réseau') + code + '\nURL : ' + (ch.url || '-'));
+      });
+      vjs.src(src);
+      vjs.play().catch(function(){});
+    } else if (el.player) {
+      el.player.onerror = function () {
+        var err = (el.player.error && el.player.error()) || {};
+        alert('Lecture impossible (natif) : ' + (err.message || 'erreur inconnue') + '\nURL : ' + (ch.url || '-'));
+      };
+      el.player.src = (src && src.src) || ch.url || '';
+      el.player.play && el.player.play();
     }
-
-    // Source directe
-    vjs.src(src);
-    vjs.play().catch(function(){});
-
-  } else if (el.player) {
-    // Fallback natif – minimal
-    el.player.onerror = function () {
-      var err = (el.player.error && el.player.error()) || {};
-      alert('Lecture impossible (natif) : ' + (err.message || 'erreur inconnue') + '\nURL : ' + (ch.url || '-'));
-    };
-    if (src && typeof src === 'object') el.player.src = src.src || '';
-    else el.player.src = (src && src.src) || ch.url || '';
-    if (el.player.play) { try { el.player.play(); } catch(_){} }
   }
 
-  // NOWBAR / titres
+  // NOWBAR / titres (affichage seulement)
   if (el.nowbar) el.nowbar.classList.remove('d-none');
   if (el.channelLogo) {
     if (ch.logo) { el.channelLogo.src = ch.logo; el.channelLogo.classList.remove('d-none'); }
@@ -452,6 +437,7 @@ function playAt(index) {
   if (el.nowUrl) el.nowUrl.textContent = ch.url || '';
   if (el.zapTitle) el.zapTitle.textContent = ch.name || '—';
 }
+
 
 
   // ===== Chargement JSON =====
@@ -624,6 +610,7 @@ function playAt(index) {
 })();
 
 })();
+
 
 
 
