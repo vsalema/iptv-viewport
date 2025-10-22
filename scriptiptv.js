@@ -166,6 +166,9 @@
    fill: true,
    controls: true,
    preload: 'auto',
+   autoplay: 'muted',
+   muted: true,
+   playsinline: true,
    inactivityTimeout: 2500,
    playbackRates: [0.75, 1, 1.25, 1.5, 2],
    techOrder: ['youtube','html5'],
@@ -332,8 +335,10 @@ btnFsPlayer?.addEventListener('click', togglePlayerFullscreen);
 
       player.pause();
       player.src({ src: url, type });
+      try { player.muted(false); player.volume(1); } catch(e) {}
       player.poster('https://cdn.futura-sciences.com/sources/images/iptv.jpeg');
-      player.play().catch(()=>{});
+      const __p = player.play();
+      if (__p && __p.catch) { __p.catch(()=>{ try{ player.muted(true);}catch(e){} }); }
 
       $('#nowPlaying').textContent = name || 'Lecture URL personnalisée';
       $('#nowUrl').textContent = prettyUrl(url);
