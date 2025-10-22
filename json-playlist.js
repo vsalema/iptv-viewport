@@ -1,45 +1,66 @@
-/* json-playlist.js (lite) — Le JSON *liste*, et c’est `scriptiptv.js` qui *lit*.
-   ➤ Au clic: on appelle window.loadSource(url) (même chemin que tes listes HTML)
-*/
-(function () {
+/* 
+ * json-playlist.js — playlists JSON & méta-listes (.m3u) sans dépendre de loadSource
+ *
+ * ➤ Intégration : placez APRÈS `scriptiptv.js` (ou seul) :
+ *    <script src="/js/json-playlist.js" defer></script>
+ *
+ * ➤ Prend en charge :
+ *    - JSON { meta, categories, channels }
+ *    - Tableau direct de chaînes [{ name, url, ... }]
+ *    - Méta-listes { playlists: [{ name, url(.m3u|.m3u8|.mpd|.mp4|.mp3|YouTube) }] }
+ *      • Si l'URL est .m3u → on télécharge et on PARSE nous-mêmes la M3U
+ *
+ * ➤ Le bouton "Lire" accepte aussi une URL .json
+ */
+(() => {
   'use strict';
 
-  // Elements existants de ta page
-  var el = {
-    // Champs/panneaux
-    list: document.getElementById('channelList'),
-    list2: document.getElementById('channelList2'),
-    inlineList: document.getElementById('inlineChannelList'),
-    cat: document.getElementById('categorySelect'),
-    cat2: document.getElementById('categorySelect2'),
-    inlineCat: document.getElementById('inlineCategorySelect'),
-    search: document.getElementById('search'),
-    search2: document.getElementById('search2'),
-    inlineSearch: document.getElementById('inlineSearch'),
-    // Sélecteurs source + boutons charger
-    sourceSel: document.getElementById('sourceSelect'),
-    sourceSel2: document.getElementById('sourceSelect2'),
-    btnLoadM3U: document.getElementById('btnLoadM3U'),
-    btnLoadM3U2: document.getElementById('btnLoadM3U2'),
-    // Champ URL + bouton Lire
-    inputUrl: document.getElementById('inputUrl'),
-    btnPlay: document.getElementById('btnPlay'),
-    // Bandeau d’info
+  // ===== Helpers & éléments =====
+  const qsa = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const el = {
+    player: document.getElementById('player'),
     nowbar: document.getElementById('nowbar'),
     channelLogo: document.getElementById('channelLogo'),
     nowPlaying: document.getElementById('nowPlaying'),
     nowUrl: document.getElementById('nowUrl'),
-    zapTitle: document.getElementById('zapTitle')
+    zapTitle: document.getElementById('zapTitle'),
+    btnPrev: document.getElementById('btnPrev'),
+    btnNext: document.getElementById('btnNext'),
+    // Catégories
+    cat: document.getElementById('categorySelect'),
+    cat2: document.getElementById('categorySelect2'),
+    inlineCat: document.getElementById('inlineCategorySelect'),
+    // Listes
+    list: document.getElementById('channelList'),
+    list2: document.getElementById('channelList2'),
+    inlineList: document.getElementById('inlineChannelList'),
+    // Recherches
+    search: document.getElementById('search'),
+    search2: document.getElementById('search2'),
+    inlineSearch: document.getElementById('inlineSearch'),
+    // Sources + boutons
+    sourceSel: document.getElementById('sourceSelect'),
+    sourceSel2: document.getElementById('sourceSelect2'),
+    btnLoadM3U: document.getElementById('btnLoadM3U'),
+    btnLoadM3U2: document.getElementById('btnLoadM3U2'),
+    inputUrl: document.getElementById('inputUrl'),
+    btnPlay: document.getElementById('btnPlay'),
   };
 
-  // État minimal : juste ce qu’il faut pour filtrer/afficher
-  var state = {
-    entries: [],     // { id, name, url, kind: 'playlist'|'channel' }
+  let vjs = null;
+  try { vjs = window.videojs ? window.videojs('player') : null; } catch (e) {}
+
+  const state = {
+    meta: {},
+    channels: [],
+    categories: [],
     filtered: [],
-    index: -1
+    index: -1,
   };
 
-  function isJsonUrl(url) { return /\.json(\?|#|$)/i.test(url || ''); }
+  const isJsonUrl = (url) => /\.json(\?|#|$)/i.test(url || '');
+
+  // ===== Détection de type =====
   function guessType(url) {
     if (!url) return '';
     if (/^yt:|youtube\.com|youtu\.be/i.test(url)) return 'youtube';
@@ -51,203 +72,112 @@
     return '';
   }
 
-  // --------- Parsing JSON → liste "cliquable" ----------
-  function parseJsonToEntries(obj) {
-    var out = [];
+  function srcForPlayer(ch) {
+    if (ch.type === 'm3u-list') return null; // non jouable
+    if (ch.type === 'youtube') return { src: ch.url.replace(/^yt:/i, ''), type: 'video/youtube' };
+    if (ch.type === 'dash') return { src: ch.url, type: 'application/dash+xml' };
+    if (ch.type === 'hls') return { src: ch.url, type: 'application/x-mpegURL' };
+    if (ch.type === 'mp4') return { src: ch.url, type: 'video/mp4' };
+    if (ch.type === 'mp3') return { src: ch.url, type: 'audio/mpeg' };
+    return { src: ch.url };
+  }
 
-    // 1) Méta-listes: { playlists: [ {name, url} ] }
-    if (obj && Array.isArray(obj.playlists)) {
-      obj.playlists.forEach(function (p, i) {
-        var name = p && (p.name || p.title || p.label) || ('Entrée ' + (i+1));
-        var url = p && (p.url || p.link || p.src);
-        if (!name || !url) return;
-        out.push({ id: 'pl_' + i, name: name, url: url, kind: 'playlist' });
-      });
+  // ===== Catégories =====
+  function buildCategories(channels, catsList) {
+    const byLabel = new Map();
+    (Array.isArray(catsList) ? catsList : []).forEach((c) => {
+      const id = c.id || (c.label || '').toLowerCase().trim();
+      if (id) byLabel.set(id, { id, label: c.label || id });
+    });
+    channels.forEach((c) => {
+      const id = (c.category || 'Autres').toString();
+      const key = id.toLowerCase();
+      if (!byLabel.has(key)) byLabel.set(key, { id: key, label: c.category || 'Autres' });
+    });
+    return [
+      { id: '*', label: 'Toutes' },
+      ...Array.from(byLabel.values()).sort((a, b) => a.label.localeCompare(b.label, 'fr')),
+    ];
+  }
+
+  // ===== Parsing JSON =====
+  function parseJsonPlaylist(obj) {
+    // 1) Natif { meta, categories, channels } ou tableau direct
+    const meta0 = obj?.meta || {};
+    const cats0 = Array.isArray(obj?.categories) ? obj.categories : [];
+    let channels0 = [];
+    if (Array.isArray(obj?.channels)) channels0 = obj.channels;
+    else if (Array.isArray(obj)) channels0 = obj; // variante courte
+
+    const toChannel = (c, i) => ({
+      id: c.id || `ch_${i}`,
+      name: c.name || c.title || c.channel || c.label,
+      url: c.url || c.src || c.link || c.stream || c.stream_url || c.play || c.playurl,
+      logo: c.logo || c.icon || c.image || c.poster || '',
+      category: c.category || c.group || c.cat || c.genre || c.type || 'Autres',
+      group: c.group || c.country || '',
+      type: c.type || guessType(c.url || c.src || c.link || c.stream || c.stream_url || c.play || c.playurl),
+      headers: c.headers || {},
+      _raw: c,
+    });
+
+    if (channels0.length) {
+      const channels = channels0
+        .filter((c) => c && (c.url || c.src || c.link || c.stream || c.stream_url || c.play || c.playurl) && (c.name || c.title || c.channel || c.label))
+        .map(toChannel);
+      const categories = buildCategories(channels, cats0);
+      return { meta: meta0, channels, categories };
     }
 
-    // 2) Liste de chaînes directe: { channels:[...] } ou tableau
-    var channels = (obj && Array.isArray(obj.channels)) ? obj.channels : (Array.isArray(obj) ? obj : null);
-    if (channels && Array.isArray(channels)) {
-      channels.forEach(function (c, i) {
-        var name = c && (c.name || c.title || c.channel || c.label);
-        var url  = c && (c.url || c.src || c.link || c.stream || c.stream_url || c.play || c.playurl);
-        if (!name || !url) return;
-        out.push({ id: 'ch_' + i, name: name, url: url, kind: 'channel', type: guessType(url) });
-      });
+    // 2) Méta-listes & variantes courantes
+    const buckets = [];
+
+    // a) { playlists: [ { name/title, url/link, logo, category } ] }
+    if (Array.isArray(obj?.playlists)) {
+      buckets.push({ key: 'playlists', items: obj.playlists });
     }
 
-    // 3) Objet de groupes { groups/categories: [...] }
-    var groups = obj && (obj.groups || obj.Categories || obj.categories);
-    if (Array.isArray(groups)) {
-      groups.forEach(function (g, gi) {
-        var items = Array.isArray(g.items) ? g.items : (Array.isArray(g.channels) ? g.channels : []);
-        items.forEach(function (it, i) {
-          var name = it && (it.name || it.title || it.channel || it.label);
-          var url  = it && (it.url || it.src || it.link || it.stream || it.stream_url || it.play || it.playurl);
-          if (!name || !url) return;
-          // On considère que ce sont des "playlist" s’ils pointent vers .m3u
-          var kind = /\.m3u8?(\?|#|$)/i.test(url) ? 'channel' : (/\.json(\?|#|$)/i.test(url) ? 'playlist' : 'playlist');
-          out.push({ id: 'gp_' + gi + '_' + i, name: name, url: url, kind: kind, type: guessType(url) });
+    // b) Objet avec tableaux par clé (catégories implicites)
+    if (obj && !Array.isArray(obj) && typeof obj === 'object') {
+      const objectArrays = Object.entries(obj).filter(([k, v]) => Array.isArray(v));
+      if (objectArrays.length && !obj.meta && !obj.channels && !obj.categories && !obj.playlists) {
+        objectArrays.forEach(([k, arr]) => {
+          arr.forEach((item) => buckets.push({ key: k, items: [{ ...item, category: item.category || k }] }));
         });
+      }
+    }
+
+    // c) { groups/categories: [{ label/name, items|channels: [...] }] }
+    const groups = obj?.groups || obj?.Categories || obj?.categories;
+    if (Array.isArray(groups)) {
+      groups.forEach((g) => {
+        const label = g.label || g.name || g.title || 'Autres';
+        const items = Array.isArray(g.items) ? g.items : Array.isArray(g.channels) ? g.channels : [];
+        if (items.length) buckets.push({ key: label, items: items.map((it) => ({ ...it, category: it.category || label })) });
       });
     }
 
-    // Si rien détecté, tenter { items|list|streams|lives }
-    var generic = obj && (obj.items || obj.list || obj.streams || obj.lives);
-    if (Array.isArray(generic)) {
-      generic.forEach(function (it, i) {
-        var name = it && (it.name || it.title || it.channel || it.label);
-        var url  = it && (it.url || it.src || it.link || it.stream || it.stream_url || it.play || it.playurl);
-        if (!name || !url) return;
-        out.push({ id: 'it_' + i, name: name, url: url, kind: /\.m3u8?(\?|#|$)/i.test(url) ? 'channel' : 'playlist', type: guessType(url) });
-      });
-    }
+    // d) { items | list | streams | lives }
+    const generic = obj?.items || obj?.list || obj?.streams || obj?.lives;
+    if (Array.isArray(generic)) buckets.push({ key: 'Autres', items: generic });
 
-    return out;
+    // Normalisation → chaque item devient un "canal" cliquable (même si c'est .m3u)
+    const flat = buckets.flatMap((b) => (b.items || []).map((c) => ({ ...c, category: c.category || b.key })));
+    const channels = flat
+      .filter((c) => (c.url || c.src || c.link || c.stream || c.stream_url || c.play || c.playurl) && (c.name || c.title || c.channel || c.label))
+      .map(toChannel);
+
+    const meta = obj?.meta || {};
+    const categories = buildCategories(channels, obj?.categories || []);
+    return { meta, channels, categories };
   }
 
-  // --------- Fetch JSON ----------
-  async function loadJsonFromUrl(url) {
-    try {
-      var resp = await fetch(url, { credentials: 'omit', cache: 'no-store' });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (resp.statusText || ''));
-      var text = await resp.text();
+  // ===== Parser M3U =====
+  function parseM3U(text) {
+    const lines = (text || '').split(/\r?\n/);
+    const out = [];
+    let cur = null;
+    const attrRe = /(\w[\w-]*)="([^"]*)"/g; // tvg-id, tvg-logo, group-title, etc.
 
-      var obj;
-      try { obj = JSON.parse(text); }
-      catch (e) {
-        console.error('[JSON] payload ≈', text.slice(0, 200));
-        throw new Error('JSON invalide');
-      }
-
-      var entries = parseJsonToEntries(obj);
-      state.entries = entries;
-      renderList();
-// Ouvrir le panneau pour voir la liste
-try {
-  var offEl = document.getElementById('panel');
-  if (offEl && window.bootstrap && bootstrap.Offcanvas) {
-    var oc = bootstrap.Offcanvas.getOrCreateInstance(offEl);
-    oc.show();
-  }
-} catch (_) {}
-
-      if (!entries.length) {
-        alert('Le JSON est chargé, mais ne contient aucune entrée exploitable (name/url manquants).');
-      }
-    } catch (err) {
-      console.error('[JSON]', err);
-      alert('Chargement JSON impossible : ' + (err && err.message ? err.message : err));
-    }
-  }
-
-  // --------- Rendu + interactions ----------
-  function filterEntries() {
-    var q = ((el.search && el.search.value) || (el.search2 && el.search2.value) || (el.inlineSearch && el.inlineSearch.value) || '').trim().toLowerCase();
-    state.filtered = state.entries.filter(function (e) {
-      if (!q) return true;
-      var hay = (e.name + ' ' + e.url).toLowerCase();
-      return hay.indexOf(q) !== -1;
-    });
-  }
-
-  function renderList() {
-    filterEntries();
-    var html = state.filtered.length
-      ? state.filtered.map(function (e, idx) {
-          var badge = (e.kind === 'playlist') ? '<span class="badge text-bg-secondary ms-2">M3U</span>' : '';
-          return '<button class="list-group-item list-group-item-action d-flex align-items-center" data-idx="' + idx + '">' +
-                 '<span class="flex-grow-1 text-truncate">' + e.name + '</span>' + badge + '</button>';
-        }).join('')
-      : '<div class="text-muted small p-2">Aucune entrée</div>';
-
-    if (el.list) el.list.innerHTML = html;
-    if (el.list2) el.list2.innerHTML = html;
-    if (el.inlineList) el.inlineList.innerHTML = html;
-
-    // Clic → déléguer au loader natif
-    
-
-    if (el.zapTitle) el.zapTitle.textContent = state.filtered[0] ? state.filtered[0].name : '—';
-  }
-
-  function playAt(idx) {
-    var e = state.filtered[idx];
-    if (!e) return;
-
-    // HTTPS page + HTTP flux → bloqué
-    if (location.protocol === 'https:' && /^http:\/\//i.test(e.url)) {
-      alert('Bloqué : flux HTTP sur page HTTPS (Mixed Content). Cherche une URL HTTPS.');
-      return;
-    }
-
-    // La lecture est DÉLÉGUÉE au player natif (scriptiptv.js)
-    if (typeof window.loadSource === 'function') {
-      window.loadSource(e.url);
-    } else {
-      alert('loadSource indisponible – assure-toi que scriptiptv.js est chargé en premier.');
-    }
-
-    // Habillage visuel (non bloquant)
-    if (el.nowbar) el.nowbar.classList.remove('d-none');
-    if (el.nowPlaying) el.nowPlaying.textContent = e.name || 'Lecture';
-    if (el.nowUrl) el.nowUrl.textContent = e.url || '';
-    if (el.zapTitle) el.zapTitle.textContent = e.name || '—';
-  }
-
-  // --------- Intégrations UI existantes ----------
-  function wireUI() {
-    // Bouton Lire en haut → route .json vers notre loader
-    if (el.btnPlay) el.btnPlay.addEventListener('click', function () {
-      var v = el.inputUrl && el.inputUrl.value ? el.inputUrl.value.trim() : '';
-      if (!v) return;
-      if (isJsonUrl(v)) loadJsonFromUrl(v);
-      else if (typeof window.loadSource === 'function') window.loadSource(v);
-    });
-
-    // “Charger la playlist” → n’intercepter QUE si .json
-    function attachSelect(btn, sel) {
-      if (!btn || !sel) return;
-      btn.addEventListener('click', function (ev) {
-        var url = sel.value || '';
-        if (isJsonUrl(url)) {
-          ev.preventDefault(); ev.stopImmediatePropagation();
-          loadJsonFromUrl(url);
-        }
-        // sinon, on laisse le loader natif gérer (.m3u / .m3u8 / etc.)
-      }, true);
-    }
-    attachSelect(el.btnLoadM3U,  el.sourceSel);
-    attachSelect(el.btnLoadM3U2, el.sourceSel2);
-
-    // Recherche
-    [el.search, el.search2, el.inlineSearch].forEach(function (inp) {
-      if (inp) inp.addEventListener('input', renderList);
-    });
-  }
-
-  // --------- Init ----------
-  wireUI();
-
-  // API debug
-  window.IPTV_JSON = {
-    load: loadJsonFromUrl,
-    state: function () { return { entries: state.entries.slice(), filtered: state.filtered.slice() }; }
-  };
-// Délégation globale : fonctionne même si la liste est réécrite
-document.addEventListener('click', function (ev) {
-  var btn = ev.target && ev.target.closest && ev.target.closest('[data-idx]');
-  if (!btn) return;
-  // S’assurer que le bouton vient de nos listes
-  var inList = btn.closest('#channelList, #channelList2, #inlineChannelList');
-  if (!inList) return;
-
-  var idx = Number(btn.getAttribute('data-idx'));
-  // Recalcule l’index côté "filtered" si nécessaire
-  if (!Number.isFinite(idx) || idx < 0) return;
-  playAt(idx);
-}, true);
-
-
-})();
-
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
