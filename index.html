@@ -367,6 +367,34 @@
   <script src="./scriptiptv.js" defer></script>
 <script src="./json-playlist.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+async function mergePlaylistsFromJSON(jsonUrl, selectId = 'playlistSelect') {
+  const res = await fetch(jsonUrl, { cache: 'no-store' });
+  const data = await res.json();
+  if (!data || !Array.isArray(data.playlists)) return;
+
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+
+  // N’ajoute que les entrées avec URL non vide, et évite les doublons d’URL
+  const exists = new Set([...sel.options].map(o => o.value));
+  for (const { name, url } of data.playlists) {
+    if (!url || exists.has(url)) continue;
+    const opt = document.createElement('option');
+    opt.value = url;
+    opt.textContent = name || url;
+    sel.appendChild(opt);
+    exists.add(url);
+  }
+}
+
+// exemple d’appel au chargement
+document.addEventListener('DOMContentLoaded', () => {
+  mergePlaylistsFromJSON('playlists.sample.json', 'playlistSelect');
+});
+</script>
+
 </body>
 </html>
+
 
