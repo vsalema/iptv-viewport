@@ -1,0 +1,28 @@
+{
+  "playlists": [
+    {
+      "name": "DEMO – Apple BIPBOP 16x9 (TS, master)",
+      "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8"
+    },
+    {
+      "name": "DEMO – Apple BIPBOP 4x3 (TS, master)",
+      "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8"
+    },
+    {
+      "name": "DEMO – Apple Advanced example (fMP4, master)",
+      "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8"
+    },
+    {
+      "name": "DEMO – Mux Big Buck Bunny (ABR)",
+      "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+    },
+    {
+      "name": "DEMO – Unified Streaming: Tears of Steel (HLS master)",
+      "url": "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8"
+    },
+    {
+      "name": "DEMO – Shaka 'Angel One' (HLS)",
+      "url": "https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8"
+    }
+  ]
+}
