@@ -372,6 +372,22 @@
       try { loadPlaylistDirectory('playlists.sample.json'); } catch (e) { console.error(e); }
     });
   </script>
+<script>
+  const selJson = document.getElementById('chanSelectFromJSON'); // l’id de ton <select> de CHAÎNES
+if (selJson) {
+  selJson.addEventListener('change', () => {
+    const opt = selJson.selectedOptions[0];
+    if (!opt) return;
 
+    const url  = (opt.value || '').trim();
+    if (!url || /\.json(\?|#|$)/i.test(url)) return; // ne pas traiter les playlists .json ici
+
+    const logo = opt.dataset.logo || '';
+    const name = opt.textContent || '';
+    window.loadSource?.(url, logo, name);
+  });
+}
+
+</script>
 </body>
 </html>
